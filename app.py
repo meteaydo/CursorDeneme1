@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import re
 from pathlib import Path
@@ -40,6 +41,163 @@ from extract_simplified_schedule import (
 TeacherSchedules = Dict[str, Dict[str, Dict[int, List[Tuple[str, str]]]]]
 
 
+def _teacher_schedules_to_html(
+    teacher_schedules: TeacherSchedules,
+    selected_teachers: List[str] | None = None,
+) -> str:
+    """Elimizdeki veri setinden modern HTML önizleme üretir (PDF'ye yazmadan)."""
+    teachers = sorted(teacher_schedules.keys())
+    if selected_teachers is not None:
+        teachers = [t for t in teachers if t in selected_teachers]
+        teachers.sort()
+    if not teachers:
+        return "<p>Gösterilecek öğretmen yok.</p>"
+
+    def esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+    cards_html: List[str] = []
+    for teacher in teachers:
+        by_day = teacher_schedules[teacher]
+        # Toplam ders saati: dolu (day, period) sayısı
+        total_hours = 0
+        for day in WEEK_DAYS:
+            periods = by_day.get(day, {})
+            for p in range(1, 10):
+                if periods.get(p, []):
+                    total_hours += 1
+        header_cells = ["<th>Gün</th>"] + [f"<th>{p}</th>" for p in range(1, 10)]
+        thead_row = "<tr>" + "".join(header_cells) + "</tr>"
+        body_rows: List[str] = []
+        for day in WEEK_DAYS:
+            periods = by_day.get(day, {})
+            cells = [f"<td><strong>{esc(day)}</strong></td>"]
+            for p in range(1, 10):
+                entries = periods.get(p, []) or []
+                if entries:
+                    parts = [f"{abbreviate_lesson_name(les)} ({esc(cls)})" for les, cls in entries]
+                    content = "<br/>".join(esc(p) for p in parts)
+                    cells.append(f"<td>{content}</td>")
+                else:
+                    cells.append('<td class="empty"></td>')
+            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+        table_body = "\n".join(body_rows)
+        colgroup = '<col class="col-gun">' + '<col class="col-saat">' * 9
+        cards_html.append(f"""
+        <div class="schedule-card">
+            <h3 class="schedule-title">{esc(teacher)} – Ders Programı {total_hours} Saat</h3>
+            <div class="schedule-table-wrap">
+                <table class="schedule-table">
+                    <colgroup>{colgroup}</colgroup>
+                    <thead>{thead_row}</thead>
+                    <tbody>{table_body}</tbody>
+                </table>
+            </div>
+        </div>
+        """)
+
+    return f"""
+    <style>
+        .schedule-cards {{ font-family: system-ui, -apple-system, sans-serif; margin: 1rem 0; }}
+        .schedule-card {{
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+            border: 1px solid #e5e7eb;
+        }}
+        .schedule-title {{
+            margin: 0;
+            padding: 1rem 1.25rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #111827;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        .schedule-table-wrap {{ overflow-x: auto; padding: 1rem 1.25rem; }}
+        .schedule-table {{
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+            font-size: 9px;
+        }}
+        .schedule-table th, .schedule-table td {{
+            border: 1px solid #9ca3af;
+            padding: 3px 5px;
+            text-align: left;
+            vertical-align: top;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }}
+        .schedule-table thead tr th {{
+            height: 22px;
+            min-height: 22px;
+            background: #d1d5db;
+            font-weight: 600;
+            color: #000;
+        }}
+        .schedule-table tbody tr td {{
+            height: 38px;
+            min-height: 38px;
+            background: #fff;
+        }}
+        .schedule-table tbody tr td.empty {{ background: #e5e7eb; }}
+        .schedule-table tbody tr:hover td:not(.empty) {{ background: #f0f9ff; }}
+        .schedule-table col.col-gun {{ width: 72px; }}
+        .schedule-table col.col-saat {{ width: auto; }}
+    </style>
+    <div class="schedule-cards">
+        {"".join(cards_html)}
+    </div>
+    """
+
+
+def _loading_overlay_html(message: str) -> str:
+    """Tam ekran, her şeyin üstünde büyük loading katmanı (HTML)."""
+    return f"""
+    <div id="loading-overlay" style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.75);
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, sans-serif;
+    ">
+        <div style="
+            width: 120px;
+            height: 120px;
+            border: 8px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.9s linear infinite;
+        "></div>
+        <p style="
+            color: #fff;
+            font-size: 2rem;
+            font-weight: 700;
+            margin-top: 2rem;
+            text-align: center;
+            padding: 0 2rem;
+            line-height: 1.4;
+        ">{message}</p>
+    </div>
+    <style>
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+    </style>
+    """
+
+
 def parse_class_name(page_text: str, fallback: str) -> str:
     """
     Sayfa metninden '9/A' gibi sınıf adını ayıklar, bulunamazsa fallback döner.
@@ -48,15 +206,9 @@ def parse_class_name(page_text: str, fallback: str) -> str:
     return m.group(1) if m else fallback
 
 
-def process_uploaded_pdf(file_bytes: bytes) -> Tuple[Dict[str, List[Tuple[str, List[str]]]], TeacherSchedules]:
+def _process_uploaded_pdf_impl(file_bytes: bytes) -> Tuple[Dict[str, List[Tuple[str, List[str]]]], TeacherSchedules]:
     """
-    Verilen PDF baytlarından:
-    - sınıf bazlı sade ders programları
-    - öğretmen bazlı ders programları
-    çıkarır.
-
-    class_schedules: {class_name: [(day, [lesson1,...]), ...]}
-    teacher_schedules: TeacherSchedules
+    Verilen PDF baytlarından sınıf ve öğretmen programlarını çıkarır (önbelleksiz).
     """
     class_schedules: Dict[str, List[Tuple[str, List[str]]]] = {}
     teacher_schedules_all: TeacherSchedules = {}
@@ -95,6 +247,15 @@ def process_uploaded_pdf(file_bytes: bytes) -> Tuple[Dict[str, List[Tuple[str, L
                             ex_list.extend(entries)
 
     return class_schedules, teacher_schedules_all
+
+
+@st.cache_data(show_spinner=False)
+def process_uploaded_pdf(file_bytes: bytes) -> Tuple[Dict[str, List[Tuple[str, List[str]]]], TeacherSchedules]:
+    """
+    Aynı PDF tekrar yüklendiğinde veya sadece çıktı tipi değiştiğinde
+    yeniden işlem yapılmaması için önbellekli sarmalayıcı.
+    """
+    return _process_uploaded_pdf_impl(file_bytes)
 
 
 def build_teacher_pdf_bytes(
@@ -156,9 +317,11 @@ def build_teacher_pdf_bytes(
             story.append(Spacer(1, 6 * mm))
 
         by_day = teacher_schedules[teacher]
-
-        story.append(Paragraph(f"{teacher} - Ders Programı", title_style))
-        story.append(Spacer(1, 6 * mm))
+        total_hours = sum(
+            1 for day in WEEK_DAYS for p in range(1, 10) if by_day.get(day, {}).get(p, [])
+        )
+        story.append(Paragraph(f"{teacher} - Ders Programı {total_hours} Saat", title_style))
+        story.append(Spacer(1, 2 * mm))
 
         # Başlık satırı: Gün, 1..9
         header_row = [Paragraph("Gün", body_style)]
@@ -166,53 +329,51 @@ def build_teacher_pdf_bytes(
             header_row.append(Paragraph(str(p), body_style))
 
         data: List[List[Paragraph]] = [header_row]
+        empty_cells: List[Tuple[int, int]] = []
         for day in WEEK_DAYS:
             periods = by_day.get(day, {})
             row: List[Paragraph] = [Paragraph(day, body_style)]
             for p in range(1, 10):
                 entries = periods.get(p, []) or []
                 if entries:
-                    # Uzun ders adları için kısaltma + çoklu sınıf desteği.
                     lines = [
                         f"{abbreviate_lesson_name(lesson)} ({cls})"
                         for lesson, cls in entries
                     ]
                     cell_html = "<br/>".join(lines)
+                    row.append(Paragraph(cell_html, body_style))
                 else:
-                    cell_html = ""
-                row.append(Paragraph(cell_html, body_style))
+                    row.append(Paragraph("", body_style))
+                    empty_cells.append((len(data), len(row) - 1))
             data.append(row)
 
-        # Satır yükseklikleri:
-        # - İlk satır (Gün, 1..9 başlığı) daha düşük
-        # - Diğer satırlar (günler) daha yüksek
         header_h = 6 * mm
         day_h = 10 * mm
         row_heights = [header_h] + [day_h] * (len(data) - 1)
 
+        style_commands: List[Tuple] = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+            ("FONTNAME", (0, 0), (-1, 0), font_name),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("FONTNAME", (0, 1), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        for r, c in empty_cells:
+            style_commands.append(("BACKGROUND", (c, r), (c, r), colors.lightgrey))
+
         tbl = Table(
             data,
-            colWidths=[25 * mm] + [16 * mm] * 9,
+            colWidths=[20 * mm] + [17 * mm] * 9,
             rowHeights=row_heights,
         )
-        tbl.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("FONTNAME", (0, 0), (-1, 0), font_name),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 1), (-1, -1), font_name),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-                ]
-            )
-        )
+        tbl.setStyle(TableStyle(style_commands))
 
         story.append(tbl)
 
@@ -223,16 +384,14 @@ def build_teacher_pdf_bytes(
 
 def main() -> None:
     st.set_page_config(page_title="Ders Programı Oluşturucu", layout="wide")
-    st.title("Sade Ders Programı ve Öğretmen Çıktıları")
 
     st.markdown(
-        "1. **Sınıf ders programı PDF'lerini yükle** (senin örnekteki gibi üstte sınıf programı, altta ders listesi olan PDF).\n"
-        "2. Sistem bu PDF'lerden **sade sınıf programlarını** ve **öğretmen ders programlarını** çıkarır.\n"
-        "3. Çıktı olarak tüm öğretmenler veya seçili öğretmenler için PDF indirebilirsin."
+        "1. **Sınıf Ders Programlarını Yükle (PDF)**\n"
+        "2. **Öğretmen Ders Programlarına Dönüştür**"
     )
 
     uploaded_files = st.file_uploader(
-        "Sınıf ders programı PDF'lerini seç (bir veya birden fazla)",
+        "Sınıf ders programı PDF dosyalarını seçin (bir veya birden fazla)",
         type=["pdf"],
         accept_multiple_files=True,
     )
@@ -244,6 +403,12 @@ def main() -> None:
     all_class_schedules: Dict[str, List[Tuple[str, List[str]]]] = {}
     all_teacher_schedules: TeacherSchedules = {}
 
+    # Tam ekran loading katmanı (iş bitince kaldırılacak)
+    loading_placeholder = st.empty()
+    loading_placeholder.markdown(
+        _loading_overlay_html("PDF dosyaları okunuyor ve analiz ediliyor… Lütfen bekleyin."),
+        unsafe_allow_html=True,
+    )
     for f in uploaded_files:
         bytes_data = f.read()
         class_schedules, teacher_schedules = process_uploaded_pdf(bytes_data)
@@ -264,22 +429,13 @@ def main() -> None:
                             continue
                         ex_list = ex_periods.setdefault(p, [])
                         ex_list.extend(entries)
+    loading_placeholder.empty()
 
     if not all_teacher_schedules:
         st.error("Yüklenen PDF'lerden öğretmen programı çıkarılamadı.")
         return
 
-    with st.expander("Tespit edilen sınıf programları", expanded=False):
-        for cls, schedule in sorted(all_class_schedules.items(), key=lambda x: x[0]):
-            st.markdown(f"**{cls}**")
-            for day, lessons in schedule:
-                st.write(f"- {day}: {', '.join(lessons)}")
-
-    st.markdown("---")
-    st.subheader("Öğretmen çıktıları")
-
     teachers = sorted(all_teacher_schedules.keys())
-    st.write(f"Toplam öğretmen sayısı: **{len(teachers)}**")
 
     output_mode = st.radio(
         "Çıktı tipi",
@@ -288,22 +444,84 @@ def main() -> None:
     )
 
     if output_mode == "Tüm öğretmenler (tek PDF)":
-        if st.button("Tüm öğretmenler için PDF oluştur"):
+        if st.button("Tüm öğretmenler için programı göster"):
+            # Önce veri setinden anında HTML önizleme (PDF yok, engel yok)
+            st.success("Aşağıda öğretmen programları veri setinden üretilmiş önizlemedir.")
+            
+            # PDF hazırlanırken loading overlay
+            pdf_loading = st.empty()
+            pdf_loading.markdown(
+                _loading_overlay_html("PDF dosyası hazırlanıyor… Lütfen bekleyin."),
+                unsafe_allow_html=True,
+            )
             pdf_bytes = build_teacher_pdf_bytes(all_teacher_schedules, selected_teachers=None)
+            pdf_loading.empty()
+            
             if pdf_bytes:
+                # Üstte: Önizleme başlığı ve sağda PDF indir butonu
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown("**Önizleme**")
+                with col2:
+                    st.download_button(
+                        label="PDF olarak indir",
+                        data=pdf_bytes,
+                        file_name="tum_ogretmenler_ders_programi.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                
+                html_preview = _teacher_schedules_to_html(all_teacher_schedules, selected_teachers=None)
+                st.components.v1.html(html_preview, height=800, scrolling=True)
+                
+                # Altta da PDF indir butonu
+                st.markdown("---")
                 st.download_button(
-                    label="PDF'yi indir",
+                    label="PDF olarak indir",
                     data=pdf_bytes,
                     file_name="tum_ogretmenler_ders_programi.pdf",
                     mime="application/pdf",
                 )
     else:
-        selected = st.multiselect("Öğretmen seç", options=teachers)
-        if selected and st.button("Seçili öğretmenler için PDF oluştur"):
+        selected = st.multiselect(
+            "Öğretmen seçin (birden fazla seçebilirsiniz)",
+            options=teachers,
+            help="Listeden öğretmenleri seçin. Birden fazla öğretmen seçerek hepsinin programını tek PDF'de indirebilirsiniz."
+        )
+        if selected and st.button("Seçili öğretmenler için programı göster"):
+            # Önce veri setinden anında HTML önizleme
+            st.success("Aşağıda seçtiğiniz öğretmenlerin programları veri setinden üretilmiş önizlemedir.")
+            
+            # PDF hazırlanırken loading overlay
+            pdf_loading = st.empty()
+            pdf_loading.markdown(
+                _loading_overlay_html("PDF dosyası hazırlanıyor… Lütfen bekleyin."),
+                unsafe_allow_html=True,
+            )
             pdf_bytes = build_teacher_pdf_bytes(all_teacher_schedules, selected_teachers=selected)
+            pdf_loading.empty()
+            
             if pdf_bytes:
+                # Üstte: Önizleme başlığı ve sağda PDF indir butonu
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown("**Önizleme**")
+                with col2:
+                    st.download_button(
+                        label="PDF olarak indir",
+                        data=pdf_bytes,
+                        file_name="secili_ogretmenler_ders_programi.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                
+                html_preview = _teacher_schedules_to_html(all_teacher_schedules, selected_teachers=selected)
+                st.components.v1.html(html_preview, height=800, scrolling=True)
+                
+                # Altta da PDF indir butonu
+                st.markdown("---")
                 st.download_button(
-                    label="PDF'yi indir",
+                    label="PDF olarak indir",
                     data=pdf_bytes,
                     file_name="secili_ogretmenler_ders_programi.pdf",
                     mime="application/pdf",

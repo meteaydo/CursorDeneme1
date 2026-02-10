@@ -635,6 +635,10 @@ def write_teacher_pdfs(
         safe_name = teacher.replace("/", "-").replace(" ", "_")
         out_path = out_dir / f"{safe_name}_ders_programi.pdf"
 
+        total_hours = sum(
+            1 for day in WEEK_DAYS for p in range(1, 10) if by_day.get(day, {}).get(p, [])
+        )
+        title_text = f"{teacher} - Ders Programı {total_hours} Saat"
         doc = SimpleDocTemplate(
             str(out_path),
             pagesize=A4,
@@ -642,12 +646,12 @@ def write_teacher_pdfs(
             rightMargin=18 * mm,
             topMargin=15 * mm,
             bottomMargin=15 * mm,
-            title=f"{teacher} - Ders Programı",
+            title=title_text,
         )
 
         story: List = []
-        story.append(Paragraph(f"{teacher} - Ders Programı", title_style))
-        story.append(Spacer(1, 6 * mm))
+        story.append(Paragraph(title_text, title_style))
+        story.append(Spacer(1, 2 * mm))
 
         # Başlık satırı: Gün, 1..9
         header_row: List[Paragraph] = [Paragraph("Gün", body_style)]
@@ -655,50 +659,48 @@ def write_teacher_pdfs(
             header_row.append(Paragraph(str(p), body_style))
 
         data: List[List[Paragraph]] = [header_row]
+        empty_cells: List[Tuple[int, int]] = []
         for day in WEEK_DAYS:
             periods = by_day.get(day, {})
             row: List[Paragraph] = [Paragraph(day, body_style)]
             for p in range(1, 10):
                 entries = periods.get(p, []) or []
                 if entries:
-                    # Aynı saate birden fazla sınıf varsa hepsini alt alta yaz.
                     lines = [f"{abbreviate_lesson_name(lesson)} ({cls})" for lesson, cls in entries]
                     cell_html = "<br/>".join(lines)
+                    row.append(Paragraph(cell_html, body_style))
                 else:
-                    cell_html = ""
-                row.append(Paragraph(cell_html, body_style))
+                    row.append(Paragraph("", body_style))
+                    empty_cells.append((len(data), len(row) - 1))
             data.append(row)
 
-        # Satır yükseklikleri:
-        # - İlk satır (Gün, 1..9 başlığı) daha düşük
-        # - Diğer satırlar (günler) daha yüksek
         header_h = 6 * mm
         day_h = 10 * mm
         row_heights = [header_h] + [day_h] * (len(data) - 1)
 
+        style_commands: List[Tuple] = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+            ("FONTNAME", (0, 0), (-1, 0), font_name),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("FONTNAME", (0, 1), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        for r, c in empty_cells:
+            style_commands.append(("BACKGROUND", (c, r), (c, r), colors.lightgrey))
+
         tbl = Table(
             data,
-            colWidths=[25 * mm] + [16 * mm] * 9,
+            colWidths=[20 * mm] + [17 * mm] * 9,
             rowHeights=row_heights,
         )
-        tbl.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("FONTNAME", (0, 0), (-1, 0), font_name),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 1), (-1, -1), font_name),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-                ]
-            )
-        )
+        tbl.setStyle(TableStyle(style_commands))
 
         story.append(tbl)
         doc.build(story)
