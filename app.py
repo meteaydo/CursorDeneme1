@@ -40,6 +40,24 @@ from extract_simplified_schedule import (
 
 TeacherSchedules = Dict[str, Dict[str, Dict[int, List[Tuple[str, str]]]]]
 
+# Gün adlarının 3 harfli kısaltmaları (mobil uyumlu HTML için)
+WEEK_DAYS_SHORT = {
+    "Pazartesi": "Paz",
+    "Salı": "Sal",
+    "Çarşamba": "Çar",
+    "Perşembe": "Per",
+    "Cuma": "Cum",
+}
+
+
+def _first_upper(s: str) -> str:
+    """Sadece ilk karakteri büyük harf yapar."""
+    if not s:
+        return s
+    if len(s) == 1:
+        return s.upper()
+    return s[0].upper() + s[1:].lower()
+
 
 def _teacher_schedules_to_html(
     teacher_schedules: TeacherSchedules,
@@ -66,16 +84,20 @@ def _teacher_schedules_to_html(
             for p in range(1, 10):
                 if periods.get(p, []):
                     total_hours += 1
-        header_cells = ["<th>Gün</th>"] + [f"<th>{p}</th>" for p in range(1, 10)]
+        header_cells = [f"<th>{esc(_first_upper('Gün'))}</th>"] + [f"<th>{p}</th>" for p in range(1, 10)]
         thead_row = "<tr>" + "".join(header_cells) + "</tr>"
         body_rows: List[str] = []
         for day in WEEK_DAYS:
             periods = by_day.get(day, {})
-            cells = [f"<td><strong>{esc(day)}</strong></td>"]
+            short_day = WEEK_DAYS_SHORT.get(day, day[:3])
+            cells = [f"<td><strong>{esc(_first_upper(short_day))}</strong></td>"]
             for p in range(1, 10):
                 entries = periods.get(p, []) or []
                 if entries:
-                    parts = [f"{abbreviate_lesson_name(les)} ({esc(cls)})" for les, cls in entries]
+                    parts = [
+                        f"{_first_upper(abbreviate_lesson_name(les))} ({esc(_first_upper(cls))})"
+                        for les, cls in entries
+                    ]
                     content = "<br/>".join(esc(p) for p in parts)
                     cells.append(f"<td>{content}</td>")
                 else:
@@ -83,9 +105,10 @@ def _teacher_schedules_to_html(
             body_rows.append("<tr>" + "".join(cells) + "</tr>")
         table_body = "\n".join(body_rows)
         colgroup = '<col class="col-gun">' + '<col class="col-saat">' * 9
+        title_text = f"{esc(_first_upper(teacher))} – {_first_upper('ders programı')} {total_hours} {_first_upper('saat')}"
         cards_html.append(f"""
         <div class="schedule-card">
-            <h3 class="schedule-title">{esc(teacher)} – Ders Programı {total_hours} Saat</h3>
+            <h3 class="schedule-title">{title_text}</h3>
             <div class="schedule-table-wrap">
                 <table class="schedule-table">
                     <colgroup>{colgroup}</colgroup>
@@ -98,34 +121,34 @@ def _teacher_schedules_to_html(
 
     return f"""
     <style>
-        .schedule-cards {{ font-family: system-ui, -apple-system, sans-serif; margin: 1rem 0; }}
+        .schedule-cards {{ font-family: system-ui, -apple-system, sans-serif; margin: 0.5rem 0; font-size: 11px; }}
         .schedule-card {{
             background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+            margin-bottom: 1rem;
             overflow: hidden;
             border: 1px solid #e5e7eb;
         }}
         .schedule-title {{
             margin: 0;
-            padding: 1rem 1.25rem;
-            font-size: 1.1rem;
+            padding: 0.4rem 0.5rem;
+            font-size: 0.7rem;
             font-weight: 600;
             color: #111827;
             background: #f9fafb;
             border-bottom: 1px solid #e5e7eb;
         }}
-        .schedule-table-wrap {{ overflow-x: auto; padding: 1rem 1.25rem; }}
+        .schedule-table-wrap {{ overflow-x: auto; padding: 0.4rem 0.5rem; -webkit-overflow-scrolling: touch; }}
         .schedule-table {{
             width: 100%;
             table-layout: fixed;
             border-collapse: collapse;
-            font-size: 9px;
+            font-size: 6px;
         }}
         .schedule-table th, .schedule-table td {{
             border: 1px solid #9ca3af;
-            padding: 3px 5px;
+            padding: 2px 3px;
             text-align: left;
             vertical-align: top;
             word-wrap: break-word;
@@ -133,20 +156,20 @@ def _teacher_schedules_to_html(
             word-break: break-word;
         }}
         .schedule-table thead tr th {{
-            height: 22px;
-            min-height: 22px;
+            height: 14px;
+            min-height: 14px;
             background: #d1d5db;
             font-weight: 600;
             color: #000;
         }}
         .schedule-table tbody tr td {{
-            height: 38px;
-            min-height: 38px;
+            height: 24px;
+            min-height: 24px;
             background: #fff;
         }}
         .schedule-table tbody tr td.empty {{ background: #e5e7eb; }}
         .schedule-table tbody tr:hover td:not(.empty) {{ background: #f0f9ff; }}
-        .schedule-table col.col-gun {{ width: 72px; }}
+        .schedule-table col.col-gun {{ width: 28px; }}
         .schedule-table col.col-saat {{ width: auto; }}
     </style>
     <div class="schedule-cards">
