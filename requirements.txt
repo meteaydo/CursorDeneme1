@@ -1,0 +1,2 @@
+pdfplumber==0.11.8
+reportlab==4.4.4
